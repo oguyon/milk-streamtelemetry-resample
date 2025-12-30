@@ -247,8 +247,8 @@ void scan_files(const char *teldir, const char *sname, double tstart, double ten
 
     while (t_scan_start <= t_end_raw) {
         struct tm *tm_scan = gmtime(&t_scan_start);
-        char date_dir[20];
-        sprintf(date_dir, "%04d%02d%02d", tm_scan->tm_year + 1900, tm_scan->tm_mon + 1, tm_scan->tm_mday);
+        char date_dir[32]; // Increased size to prevent warning
+        snprintf(date_dir, sizeof(date_dir), "%04d%02d%02d", tm_scan->tm_year + 1900, tm_scan->tm_mon + 1, tm_scan->tm_mday);
 
         char dirpath[MAX_PATH];
         snprintf(dirpath, sizeof(dirpath), "%s/%s/%s", teldir, date_dir, sname);
@@ -266,7 +266,10 @@ void scan_files(const char *teldir, const char *sname, double tstart, double ten
 
                         // We store all files for now, then sort and filter
                         if (*count < MAX_FILES) {
-                            snprintf((*files)[*count].filepath, MAX_PATH, "%s/%s", dirpath, dir->d_name);
+                            int written = snprintf((*files)[*count].filepath, MAX_PATH, "%s/%s", dirpath, dir->d_name);
+                            if (written >= MAX_PATH) {
+                                fprintf(stderr, "Warning: path truncated for %s/%s\n", dirpath, dir->d_name);
+                            }
                             (*files)[*count].tstart = file_abs_time;
                             (*count)++;
                         }
