@@ -266,10 +266,7 @@ void scan_files(const char *teldir, const char *sname, double tstart, double ten
 
                         // We store all files for now, then sort and filter
                         if (*count < MAX_FILES) {
-                            int written = snprintf((*files)[*count].filepath, MAX_PATH, "%s/%s", dirpath, dir->d_name);
-                            if (written >= MAX_PATH) {
-                                fprintf(stderr, "Warning: path truncated for %s/%s\n", dirpath, dir->d_name);
-                            }
+                            snprintf((*files)[*count].filepath, MAX_PATH, "%s/%s", dirpath, dir->d_name);
                             (*files)[*count].tstart = file_abs_time;
                             (*count)++;
                         }
