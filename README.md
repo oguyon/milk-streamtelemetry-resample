@@ -37,3 +37,9 @@ milk-streamtelemetry-resample /mnt/data fastcam UT20251204T12:10 +12:05 0.01
 ```
 the program will look for files of the form `/mnt/data/20251204/fastcam/fastcam_hh:mm:ss.sssssssss.txt` whith the `hh:mm:ss.sssssssss` part of the filename falling within  `12:10:00.000` and `12:12:05`. Additionally, the previous file will be included in the list of files scanned, as the time sample in the filename only shows the time at the beginning of sequence captured by the file. The program will list all such files to be scanned.
 
+## Testing
+
+The repo comes with a sample of telemetry files (.txt and .fits.header files). To test the program, run in the build directory:
+```
+./milk-streamtelemetry-resample ../telemetrysample/ ocam2d UT20251106T10:20 UT20251106T10:21 0.01
+```
