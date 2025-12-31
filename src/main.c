@@ -287,6 +287,11 @@ void scan_files(const char *teldir, const char *sname, double tstart, double ten
 
     if (start_idx < 0) start_idx = 0;
 
+    // We want to include the previous file to ensure continuity of frame timing
+    if (start_idx > 0) {
+        start_idx--;
+    }
+
     FileEntry *filtered = malloc(MAX_FILES * sizeof(FileEntry));
     int f_count = 0;
 
