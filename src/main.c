@@ -26,6 +26,7 @@ void print_scan_list(FileEntry *files, int count);
 void print_time_info(double tstart, double tend);
 int compare_files(const void *a, const void *b);
 void format_time(double t, char *buffer, size_t size);
+void process_telemetry(FileEntry *files, int count, const char *sname, double tstart, double tend, double dt);
 
 int main(int argc, char *argv[]) {
     if (argc != 6) {
@@ -37,8 +38,7 @@ int main(int argc, char *argv[]) {
     const char *sname = argv[2];
     const char *tstart_str = argv[3];
     const char *tend_str = argv[4];
-    // dt is available but not used for scanning logic yet, but required by spec
-    // double dt = atof(argv[5]);
+    double dt = atof(argv[5]);
 
     double tstart = parse_time_arg(tstart_str, 0);
     if (tstart < 0) {
@@ -63,13 +63,11 @@ int main(int argc, char *argv[]) {
     // "The program will list all such files to be scanned."
     print_scan_list(files, file_count);
 
+    // Process and generate resampled list
+    process_telemetry(files, file_count, sname, tstart, tend, dt);
+
     // Free memory
     if (files) free(files);
-
-    // Note: The prompt asks to write code per instructions. The instructions in Usage example
-    // end with "The program will list all such files to be scanned."
-    // While the name suggests resampling, without specification on output format/destination,
-    // and given the explicit behavior description, this completes the requirements described in Usage.
 
     return 0;
 }
@@ -194,9 +192,6 @@ void print_time_info(double tstart, double tend) {
 
 // Parses time from filename like sname_HH:MM:SS.SSSSSSSSS.txt
 // We need the date from the directory context, so this function only returns seconds within the day
-// Actually, it's better if we pass the full date context or construct it properly.
-// But wait, the directory is YYYYMMDD.
-// So we should construct the full unix time.
 double parse_filename_time(const char *filename) {
     // Expected format: sname_HH:MM:SS.SSSSSSSSS.txt
     // Find the underscore
@@ -220,7 +215,6 @@ int compare_files(const void *a, const void *b) {
 }
 
 // Get list of day directories YYYYMMDD between tstart and tend
-// Actually, we can just iterate day by day.
 void scan_files(const char *teldir, const char *sname, double tstart, double tend, FileEntry **files, int *count) {
     *files = malloc(MAX_FILES * sizeof(FileEntry));
     *count = 0;
@@ -236,18 +230,11 @@ void scan_files(const char *teldir, const char *sname, double tstart, double ten
     tm_iter->tm_sec = 0;
     t_iter_raw = timegm(tm_iter);
 
-    // We also need the previous day just in case the "previous file" is in previous day
-    // But the logic "previous file will be included" suggests we should find the file just before tstart.
-    // If tstart is 00:00:01, the previous file might be in previous day (23:59:59).
-    // So let's start checking from (tstart - 24h) just to be safe?
-    // Or simpler: checking day of tstart and day of tend is usually enough, but if tstart is close to midnight, we might need prev day.
-    // Let's start from day of (tstart - padding). Say 1 day padding.
-
     time_t t_scan_start = t_iter_raw - 24 * 3600;
 
     while (t_scan_start <= t_end_raw) {
         struct tm *tm_scan = gmtime(&t_scan_start);
-        char date_dir[32]; // Increased size to prevent warning
+        char date_dir[32];
         snprintf(date_dir, sizeof(date_dir), "%04d%02d%02d", tm_scan->tm_year + 1900, tm_scan->tm_mon + 1, tm_scan->tm_mday);
 
         char dirpath[MAX_PATH];
@@ -286,17 +273,6 @@ void scan_files(const char *teldir, const char *sname, double tstart, double ten
     qsort(*files, *count, sizeof(FileEntry), compare_files);
 
     // Now filter
-    // We need all files overlapping [tstart, tend]
-    // And "previous file will be included... as the time sample... shows the time at the beginning of sequence"
-    // So we need the file where file.tstart <= tstart < file.next_tstart
-    // OR just file.tstart <= tstart. The closest one.
-
-    // Strategy: find the index of the first file with tstart > given_tstart.
-    // The file immediately before that is the "previous file" (covering the start).
-    // Then include all subsequent files until file.tstart >= tend.
-    // Actually, if file starts before tend, it might contain data up to tend.
-
-    // Let's identify the start index.
     int start_idx = -1;
     for (int i = 0; i < *count; i++) {
         if ((*files)[i].tstart > tstart) {
@@ -309,32 +285,15 @@ void scan_files(const char *teldir, const char *sname, double tstart, double ten
         start_idx = *count - 1;
     }
 
-    if (start_idx < 0) start_idx = 0; // If no file starts before tstart, start with first available?
+    if (start_idx < 0) start_idx = 0;
 
-    // Now collect relevant files into a new list or just mark them
-    // We'll reuse the array by shifting or just creating a new one?
-    // Let's create a temporary list
     FileEntry *filtered = malloc(MAX_FILES * sizeof(FileEntry));
     int f_count = 0;
 
     for (int i = start_idx; i < *count; i++) {
-        // Condition to stop:
-        // We need files that cover range up to tend.
-        // A file starting at T contains data for some duration.
-        // We don't know the duration without reading it, but generally we include files starting before tend.
-        // If a file starts exactly at tend, it might be relevant?
-        // Usage example: "look for files ... with filename falling within 12:10:00 and 12:12:05. Additionally, the previous file..."
-        // So we include files with tstart in [tstart, tend], PLUS one previous.
-
-        // My logic above found `start_idx` as the "previous file" (tstart <= query_tstart).
-        // So we include it.
-        // And we include any file where tstart <= tend.
-
         if ((*files)[i].tstart <= tend) {
              filtered[f_count++] = (*files)[i];
         } else {
-            // Once we pass tend, do we stop?
-            // Yes, a file starting after tend definitely doesn't contain data before tend (assuming chronological)
             break;
         }
     }
@@ -348,4 +307,95 @@ void print_scan_list(FileEntry *files, int count) {
     for (int i = 0; i < count; i++) {
         printf("%s\n", files[i].filepath);
     }
+}
+
+void process_telemetry(FileEntry *files, int count, const char *sname, double tstart, double tend, double dt) {
+    char out_filename[MAX_PATH];
+    snprintf(out_filename, MAX_PATH, "%s.resample.txt", sname);
+
+    FILE *fout = fopen(out_filename, "w");
+    if (!fout) {
+        fprintf(stderr, "Error opening output file %s\n", out_filename);
+        return;
+    }
+
+    // Output headers if needed? Prompt doesn't specify header row, just format.
+    // Assuming no header row in output.
+
+    int frame_index = 0;
+    double prev_frame_end = -1.0;
+
+    char line[1024];
+
+    for (int i = 0; i < count; i++) {
+        FILE *fin = fopen(files[i].filepath, "r");
+        if (!fin) {
+            fprintf(stderr, "Warning: Could not open input file %s\n", files[i].filepath);
+            continue;
+        }
+
+        // Extract just the filename from the path
+        const char *filename_only = strrchr(files[i].filepath, '/');
+        if (filename_only) filename_only++;
+        else filename_only = files[i].filepath;
+
+        while (fgets(line, sizeof(line), fin)) {
+            if (line[0] == '#') continue; // Skip header
+
+            // Parse line.
+            // Format: col1 : frame index, ... col5 : Absolute time (acquisition)
+            // We assume standard whitespace separation
+
+            int col1;
+            double col5;
+
+            // We need to parse up to col5.
+            // col1 col2 col3 col4 col5 ...
+            int col2;
+            double col3, col4;
+            // The prompt says col1: index, col5: absolute time (acquisition).
+            // Let's try to parse 5 tokens.
+            int n = sscanf(line, "%d %d %lf %lf %lf", &col1, &col2, &col3, &col4, &col5);
+            if (n < 5) continue;
+
+            double current_frame_end = col5;
+
+            if (prev_frame_end < 0) {
+                // First frame ever encountered.
+                // We don't have a start time for this frame.
+                // We'll skip outputting it, but we set prev_frame_end so the NEXT frame is valid.
+                prev_frame_end = current_frame_end;
+                continue;
+            }
+
+            double current_frame_start = prev_frame_end;
+
+            // Check overlap
+            // Overlap: [start, end] overlaps [tstart, tend]
+            // start < tend AND end > tstart
+
+            if (current_frame_start < tend && current_frame_end > tstart) {
+                double resampled_start = (current_frame_start - tstart) / dt;
+                double resampled_end = (current_frame_end - tstart) / dt;
+
+                fprintf(fout, "%d %.6lf %.6lf %s %d %.6lf %.6lf\n",
+                        frame_index,
+                        current_frame_start,
+                        current_frame_end,
+                        filename_only,
+                        col1,
+                        resampled_start,
+                        resampled_end);
+
+                frame_index++;
+            }
+
+            prev_frame_end = current_frame_end;
+        }
+
+        fclose(fin);
+    }
+
+    fclose(fout);
+    printf("Output written to %s\n", out_filename);
 }
