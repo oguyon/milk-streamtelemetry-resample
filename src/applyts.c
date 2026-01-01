@@ -3,6 +3,7 @@
 #include <string.h>
 #include <math.h>
 #include <time.h>
+#include <unistd.h>
 #include "fitsio.h"
 
 // Struct to track active output frames in memory
@@ -85,16 +86,19 @@ void flush_all_frames(fitsfile *fptr, long naxis1, long naxis2) {
 }
 
 // Construct the full path to the FITS file
+// Checks for .fits first, then .fits.fz
 void get_full_fits_path(char *full_path, const char *teldir, const char *filename, double timestamp) {
+    char base_path[1024];
+
     if (teldir == NULL) {
         // Fallback: assume filename or current directory
         // Need to change extension
-        strcpy(full_path, filename);
-        char *ext = strrchr(full_path, '.');
+        strcpy(base_path, filename);
+        char *ext = strrchr(base_path, '.');
         if (ext && strcmp(ext, ".txt") == 0) {
             strcpy(ext, ".fits");
         } else {
-            strcat(full_path, ".fits");
+            strcat(base_path, ".fits");
         }
     } else {
         // Extract sname from filename (substring before last '_')
@@ -133,7 +137,48 @@ void get_full_fits_path(char *full_path, const char *teldir, const char *filenam
             strcat(fname_fits, ".fits");
         }
 
-        sprintf(full_path, "%s/%s/%s/%s", teldir, date_str, sname, fname_fits);
+        snprintf(base_path, sizeof(base_path), "%s/%s/%s/%s", teldir, date_str, sname, fname_fits);
+    }
+
+    // Now check existence
+    // 1. Check .fits
+    if (access(base_path, F_OK) == 0) {
+        strcpy(full_path, base_path);
+        return;
+    }
+
+    // 2. Check .fits.fz
+    char fz_path[1050];
+    snprintf(fz_path, sizeof(fz_path), "%s.fz", base_path);
+    if (access(fz_path, F_OK) == 0) {
+        strcpy(full_path, fz_path);
+        return;
+    }
+
+    // Default to base_path if neither found (so error message will refer to .fits)
+    strcpy(full_path, base_path);
+}
+
+void open_input_fits(fitsfile **infptr, const char *path, int *status) {
+    fits_open_file(infptr, path, READONLY, status);
+    if (*status) return;
+
+    // Check if primary HDU has data. If NAXIS=0, try moving to the first extension.
+    // This handles .fits.fz (fpack) where data is often in the 1st extension.
+    int naxis = 0;
+    fits_get_img_dim(*infptr, &naxis, status);
+    if (*status == 0 && naxis == 0) {
+        // Move to first extension
+        int hdutype;
+        fits_movabs_hdu(*infptr, 2, &hdutype, status);
+        if (*status) {
+            // If error moving, reset status and assume primary was intended but empty
+            // fits_report_error(stderr, *status); // Don't report yet
+            *status = 0;
+            // Go back to primary? No, if move failed, we are likely still at primary.
+            // But if move failed, maybe there are no extensions.
+            // In that case, naxis=0 means no data.
+        }
     }
 }
 
@@ -193,7 +238,7 @@ int main(int argc, char *argv[]) {
     // Open first FITS to get NAXIS
     fitsfile *infptr;
     int status = 0;
-    fits_open_file(&infptr, first_fits_file_path, READONLY, &status);
+    open_input_fits(&infptr, first_fits_file_path, &status);
     if (status) {
         fprintf(stderr, "Error opening first FITS file %s\n", first_fits_file_path);
         fits_report_error(stderr, status);
@@ -224,9 +269,9 @@ int main(int argc, char *argv[]) {
     strcpy(out_filename, resample_file);
     char *res_ext = strstr(out_filename, ".resample.txt");
     if (res_ext) {
-        strcpy(res_ext, ".fits");
+        strcpy(res_ext, ".resample.fits");
     } else {
-        strcat(out_filename, ".fits");
+        strcat(out_filename, ".resample.fits");
     }
 
     // Delete if exists
@@ -265,7 +310,7 @@ int main(int argc, char *argv[]) {
             char full_path[1024];
             get_full_fits_path(full_path, teldir, fname, t_start);
 
-            fits_open_file(&curr_infptr, full_path, READONLY, &status);
+            open_input_fits(&curr_infptr, full_path, &status);
             if (status) {
                 fprintf(stderr, "Warning: Could not open %s. Skipping frame.\n", full_path);
                 status = 0;
