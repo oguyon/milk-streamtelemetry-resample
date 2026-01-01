@@ -2,6 +2,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <math.h>
+#include <time.h>
 #include "fitsio.h"
 
 // Struct to track active output frames in memory
@@ -83,13 +84,70 @@ void flush_all_frames(fitsfile *fptr, long naxis1, long naxis2) {
     flush_frames(fptr, 2147483647, naxis1, naxis2); // Flush everything
 }
 
+// Construct the full path to the FITS file
+void get_full_fits_path(char *full_path, const char *teldir, const char *filename, double timestamp) {
+    if (teldir == NULL) {
+        // Fallback: assume filename or current directory
+        // Need to change extension
+        strcpy(full_path, filename);
+        char *ext = strrchr(full_path, '.');
+        if (ext && strcmp(ext, ".txt") == 0) {
+            strcpy(ext, ".fits");
+        } else {
+            strcat(full_path, ".fits");
+        }
+    } else {
+        // Extract sname from filename (substring before last '_')
+        // Expected filename format: sname_HH:MM:SS.sss.txt
+        char sname[256];
+        const char *last_underscore = strrchr(filename, '_');
+        if (last_underscore) {
+            size_t len = last_underscore - filename;
+            if (len >= sizeof(sname)) len = sizeof(sname) - 1;
+            strncpy(sname, filename, len);
+            sname[len] = '\0';
+        } else {
+            // Unexpected format, fallback to entire filename without extension?
+            // Or assume sname is not present.
+            // Let's assume the user provided just filename if no underscore.
+            strcpy(sname, filename);
+            // remove extension if present
+            char *dot = strrchr(sname, '.');
+            if (dot) *dot = '\0';
+        }
+
+        // Format Date YYYYMMDD from timestamp
+        time_t raw_time = (time_t)timestamp;
+        struct tm tm_info;
+        gmtime_r(&raw_time, &tm_info);
+        char date_str[32];
+        strftime(date_str, sizeof(date_str), "%Y%m%d", &tm_info);
+
+        // Construct path: teldir/YYYYMMDD/sname/filename_with_fits
+        char fname_fits[1024];
+        strcpy(fname_fits, filename);
+        char *ext = strrchr(fname_fits, '.');
+        if (ext && strcmp(ext, ".txt") == 0) {
+            strcpy(ext, ".fits");
+        } else {
+            strcat(fname_fits, ".fits");
+        }
+
+        sprintf(full_path, "%s/%s/%s/%s", teldir, date_str, sname, fname_fits);
+    }
+}
+
 int main(int argc, char *argv[]) {
-    if (argc != 2) {
-        fprintf(stderr, "Usage: %s <resample.txt>\n", argv[0]);
+    if (argc < 2 || argc > 3) {
+        fprintf(stderr, "Usage: %s <resample.txt> [teldir]\n", argv[0]);
         return 1;
     }
 
     const char *resample_file = argv[1];
+    const char *teldir = NULL;
+    if (argc == 3) {
+        teldir = argv[2];
+    }
 
     // First pass: scan resample file to find dimensions and max index
     FILE *f = fopen(resample_file, "r");
@@ -99,7 +157,7 @@ int main(int argc, char *argv[]) {
     }
 
     long max_out_idx = -1;
-    char first_fits_file[1024] = "";
+    char first_fits_file_path[1024] = "";
     char line[1024];
 
     // Format of resample.txt line:
@@ -116,9 +174,9 @@ int main(int argc, char *argv[]) {
         int n = sscanf(line, "%d %lf %lf %s %d %lf %lf", &g_idx, &t_start, &t_end, fname, &l_idx, &r_start, &r_end);
         if (n < 7) continue;
 
-        if (first_fits_file[0] == '\0') {
-            // Found first file
-            strcpy(first_fits_file, fname);
+        if (first_fits_file_path[0] == '\0') {
+            // Found first file, compute its path
+            get_full_fits_path(first_fits_file_path, teldir, fname, t_start);
         }
 
         long k_end = (long)floor(r_end - 1e-9);
@@ -132,24 +190,13 @@ int main(int argc, char *argv[]) {
         return 1;
     }
 
-    // Replace extension of first file to get .fits
-    char *ext = strrchr(first_fits_file, '.');
-    if (ext && strcmp(ext, ".txt") == 0) {
-        strcpy(ext, ".fits");
-    } else {
-        // Just append if no extension or different
-        strcat(first_fits_file, ".fits");
-    }
-
     // Open first FITS to get NAXIS
     fitsfile *infptr;
     int status = 0;
-    fits_open_file(&infptr, first_fits_file, READONLY, &status);
+    fits_open_file(&infptr, first_fits_file_path, READONLY, &status);
     if (status) {
-        fprintf(stderr, "Error opening first FITS file %s\n", first_fits_file);
+        fprintf(stderr, "Error opening first FITS file %s\n", first_fits_file_path);
         fits_report_error(stderr, status);
-        // Fallback: check if we should look in another dir?
-        // For now, fail.
         return 1;
     }
 
@@ -194,7 +241,7 @@ int main(int argc, char *argv[]) {
     error_report(status);
 
     // Process
-    char current_fits_name[1024] = "";
+    char current_fits_name[1024] = ""; // This stores the source filename from the text file (e.g. apapane_...txt)
     fitsfile *curr_infptr = NULL;
     float *input_buffer = (float *)malloc(n_pixels * sizeof(float));
 
@@ -208,23 +255,19 @@ int main(int argc, char *argv[]) {
         int n = sscanf(line, "%d %lf %lf %s %d %lf %lf", &g_idx, &t_start, &t_end, fname, &l_idx, &r_start, &r_end);
         if (n < 7) continue;
 
-        // Change extension to .fits
-        char *ext_in = strrchr(fname, '.');
-        if (ext_in && strcmp(ext_in, ".txt") == 0) {
-            strcpy(ext_in, ".fits");
-        } else {
-            strcat(fname, ".fits");
-        }
-
-        // Open/Switch input file
+        // Check if we need to open a new file
         if (strcmp(fname, current_fits_name) != 0) {
             if (curr_infptr) {
                 fits_close_file(curr_infptr, &status);
                 status = 0; // ignore close errors?
             }
-            fits_open_file(&curr_infptr, fname, READONLY, &status);
+
+            char full_path[1024];
+            get_full_fits_path(full_path, teldir, fname, t_start);
+
+            fits_open_file(&curr_infptr, full_path, READONLY, &status);
             if (status) {
-                fprintf(stderr, "Warning: Could not open %s. Skipping frame.\n", fname);
+                fprintf(stderr, "Warning: Could not open %s. Skipping frame.\n", full_path);
                 status = 0;
                 curr_infptr = NULL;
                 strcpy(current_fits_name, "");
@@ -236,11 +279,9 @@ int main(int argc, char *argv[]) {
         if (!curr_infptr) continue;
 
         // Read input frame
-        // l_idx is 0-based? Telemetry files usually have 0-based indices.
-        // FITS is 1-based. So l_idx + 1.
+        // l_idx is 0-based in .txt file (assuming mkts output), FITS is 1-based.
         long fpixel[3] = {1, 1, l_idx + 1};
-        // Verify dimensions? Assuming all inputs are same size.
-        // Read 2D plane
+
         int anynul;
         fits_read_pix(curr_infptr, TFLOAT, fpixel, n_pixels, NULL, input_buffer, &anynul, &status);
         if (status) {
@@ -253,8 +294,7 @@ int main(int argc, char *argv[]) {
         long k_start = (long)floor(r_start);
         long k_end = (long)floor(r_end - 1e-9);
 
-        // Before adding, flush any old frames from buffer that are definitively done.
-        // Since input is time ordered, any output frame index < k_start will not be touched again.
+        // Before adding, flush any old frames from buffer
         flush_frames(outfptr, k_start, naxis1, naxis2);
 
         for (long k = k_start; k <= k_end; k++) {
