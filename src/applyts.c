@@ -201,7 +201,9 @@ int main(int argc, char *argv[]) {
         return 1;
     }
 
-    long max_out_idx = -1;
+    // Track max resampled end time to determine cube size
+    double max_r_end = 0.0;
+
     char first_fits_file_path[1024] = "";
     char line[1024];
 
@@ -224,13 +226,20 @@ int main(int argc, char *argv[]) {
             get_full_fits_path(first_fits_file_path, teldir, fname, t_start);
         }
 
-        long k_end = (long)floor(r_end - 1e-9);
-        if (k_end > max_out_idx) max_out_idx = k_end;
+        if (r_end > max_r_end) max_r_end = r_end;
     }
     rewind(f);
 
-    if (max_out_idx < 0) {
-        fprintf(stderr, "No valid data found in %s\n", resample_file);
+    // Calculate number of frames.
+    // We strictly use the floor of max_r_end (plus a small epsilon for FP noise).
+    // This excludes the last partial frame.
+    // E.g., if max_r_end is 10.2, we want 10 frames (indices 0..9).
+    // If max_r_end is 10.0, we want 10 frames (indices 0..9).
+    long n_output_frames = (long)floor(max_r_end + 1e-5);
+    long max_out_idx = n_output_frames - 1;
+
+    if (n_output_frames <= 0) {
+        fprintf(stderr, "No valid data found in %s or empty output range\n", resample_file);
         fclose(f);
         return 1;
     }
@@ -261,7 +270,7 @@ int main(int argc, char *argv[]) {
     long naxis2 = naxes[1];
     long n_pixels = naxis1 * naxis2;
 
-    printf("Output Dimensions: %ld x %ld x %ld (frames)\n", naxis1, naxis2, max_out_idx + 1);
+    printf("Output Dimensions: %ld x %ld x %ld (frames)\n", naxis1, naxis2, n_output_frames);
 
     // Create Output FITS
     char out_filename[1024];
@@ -281,7 +290,7 @@ int main(int argc, char *argv[]) {
     fits_create_file(&outfptr, out_filename, &status);
     error_report(status);
 
-    long out_naxes[3] = {naxis1, naxis2, max_out_idx + 1};
+    long out_naxes[3] = {naxis1, naxis2, n_output_frames};
     fits_create_img(outfptr, FLOAT_IMG, 3, out_naxes, &status);
     error_report(status);
 
@@ -339,20 +348,15 @@ int main(int argc, char *argv[]) {
         long k_start = (long)floor(r_start);
         long k_end = (long)floor(r_end - 1e-9);
 
-        // Filter negative k_start.
-        // We only write to indices >= 0.
-        // If k < 0, it means the overlap is before the start time.
-        // mkts generates a grid starting at 0.0 (=tstart).
-        // Anything < 0.0 is outside the requested output cube.
         if (k_start < 0) k_start = 0;
 
         // Before adding, flush any old frames from buffer
-        // Note: flush_frames uses the threshold index.
-        // If k_start=0, we flush nothing (<0).
-        // If k_start=1, we flush 0.
         flush_frames(outfptr, k_start, naxis1, naxis2);
 
         for (long k = k_start; k <= k_end; k++) {
+            // Skip frames beyond the defined output size
+            if (k > max_out_idx) continue;
+
             // Calculate overlap
             double o_start = fmax(r_start, (double)k);
             double o_end = fmin(r_end, (double)(k + 1));
