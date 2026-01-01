@@ -324,8 +324,15 @@ void process_telemetry(FileEntry *files, int count, const char *sname, double ts
         return;
     }
 
-    // Output headers if needed? Prompt doesn't specify header row, just format.
-    // Assuming no header row in output.
+    // Output headers
+    fprintf(fout, "# Telemetry resampled data\n");
+    fprintf(fout, "# col1: Global frame index\n");
+    fprintf(fout, "# col2: Frame start time (Unix sec)\n");
+    fprintf(fout, "# col3: Frame end time (Unix sec)\n");
+    fprintf(fout, "# col4: Source filename\n");
+    fprintf(fout, "# col5: Local frame index\n");
+    fprintf(fout, "# col6: Resampled start time\n");
+    fprintf(fout, "# col7: Resampled end time\n");
 
     int frame_index = 0;
     double prev_frame_end = -1.0;
