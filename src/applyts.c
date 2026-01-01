@@ -339,7 +339,17 @@ int main(int argc, char *argv[]) {
         long k_start = (long)floor(r_start);
         long k_end = (long)floor(r_end - 1e-9);
 
+        // Filter negative k_start.
+        // We only write to indices >= 0.
+        // If k < 0, it means the overlap is before the start time.
+        // mkts generates a grid starting at 0.0 (=tstart).
+        // Anything < 0.0 is outside the requested output cube.
+        if (k_start < 0) k_start = 0;
+
         // Before adding, flush any old frames from buffer
+        // Note: flush_frames uses the threshold index.
+        // If k_start=0, we flush nothing (<0).
+        // If k_start=1, we flush 0.
         flush_frames(outfptr, k_start, naxis1, naxis2);
 
         for (long k = k_start; k <= k_end; k++) {
