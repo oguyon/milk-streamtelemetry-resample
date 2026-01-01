@@ -37,6 +37,19 @@ milk-streamtelemetry-resample /mnt/data fastcam UT20251204T12:10 +12:05 0.01
 ```
 the program will look for files of the form `/mnt/data/20251204/fastcam/fastcam_hh:mm:ss.sssssssss.txt` whith the `hh:mm:ss.sssssssss` part of the filename falling within  `12:10:00.000` and `12:12:05`. Additionally, the previous file will be included in the list of files scanned, as the time sample in the filename only shows the time at the beginning of sequence captured by the file. The program will list all such files to be scanned.
 
+## Output
+
+The program generates an ASCII output file named `<sname>.resample.txt`. This file contains the list of input frames overlapping with the specified time range. The file starts with a header (lines starting with `#`) describing the columns.
+
+The columns are:
+1. **Global frame index**: Frame index starting at 0 for the first frame overlapping with the time range.
+2. **Frame start time**: Frame start time in Unix seconds. This is assumed to be equal to the end time of the previous frame.
+3. **Frame end time**: Frame end time in Unix seconds (acquisition time end).
+4. **Source filename**: The `.txt` file where the frame was found.
+5. **Local frame index**: The frame index within the source `.txt` file.
+6. **Resampled start time**: Frame start time in the new resampled time unit (floating point number, 0.0 at `tstart`, incrementing by 1.0 for every `dt`).
+7. **Resampled end time**: Frame end time in the new resampled time unit.
+
 ## Testing
 
 The repo comes with a sample of telemetry files (.txt and .fits.header files). To test the program, run in the build directory:
