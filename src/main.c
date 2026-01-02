@@ -29,8 +29,8 @@ void format_time(double t, char *buffer, size_t size);
 void process_telemetry(FileEntry *files, int count, const char *sname, double tstart, double tend, double dt);
 
 int main(int argc, char *argv[]) {
-    if (argc != 6) {
-        fprintf(stderr, "Usage: %s <teldir> <sname> <tstart> <tend> <dt>\n", argv[0]);
+    if (argc != 6 && argc != 7) {
+        fprintf(stderr, "Usage: %s <teldir> <sname> <tstart> <tend> <dt> [offset]\n", argv[0]);
         return 1;
     }
 
@@ -39,6 +39,10 @@ int main(int argc, char *argv[]) {
     const char *tstart_str = argv[3];
     const char *tend_str = argv[4];
     double dt = atof(argv[5]);
+    double offset = 0.0;
+    if (argc == 7) {
+        offset = atof(argv[6]);
+    }
 
     double tstart = parse_time_arg(tstart_str, 0);
     if (tstart < 0) {
@@ -51,6 +55,10 @@ int main(int argc, char *argv[]) {
         fprintf(stderr, "Error parsing tend: %s\n", tend_str);
         return 1;
     }
+
+    // Apply offset
+    tstart += offset;
+    tend += offset;
 
     // "The program will first display the start and end time in both unix seconds and UT date formats"
     print_time_info(tstart, tend);
